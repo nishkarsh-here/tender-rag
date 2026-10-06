@@ -3,24 +3,24 @@
 A small Retrieval Augmented Generation system that answers questions about
 government tender documents, and shows which page each answer came from.
 
-Generative AI, Assignment 3 — AI & Data Science Program, Jio Institute.
+Generative AI, Assignment 3. AI & Data Science Program, Jio Institute.
 
 **Live demo:** https://70ea21f7443a868304.gradio.live
 
 That is a Gradio share link, so it is only up while we are running the app on
 our machine, and it expires after about a week. If it does not open, the app
-runs locally in two commands — see [How to run](#how-to-run) below.
+runs locally in two commands, see [How to run](#how-to-run) below.
 
 ---
 
 ## The problem
 
-A government tender is 20–30 pages of dense clauses. Before bidding, a company
+A government tender is 20 to 30 pages of dense clauses. Before bidding, a company
 has to pull out a handful of facts: the earnest money deposit, the last date for
 submission, the estimated cost, who the bid is addressed to, what happens if the
 bid is withdrawn.
 
-Those facts are scattered across the document and worded inconsistently — one
+Those facts are scattered across the document and worded inconsistently. One
 tender says "EMD", another says "earnest money deposit", a third says "bid
 security". Missing one of them can get a bid rejected outright.
 
@@ -202,7 +202,7 @@ Answer:
 
 ## The LiteLLM fallback
 
-The LLM call can fail — most often because a free API tier rate-limits in the
+The LLM call can fail, most often because a free API tier rate-limits in the
 middle of a demo. `ask_llm_with_fallback()` in `rag/step6_generate.py` tries a
 primary model, and if that call raises, it sends the same prompt to a second
 model and reports which one answered:
