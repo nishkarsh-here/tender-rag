@@ -16,16 +16,18 @@ import json
 from pathlib import Path
 
 import gradio as gr
+from langchain_community.document_loaders import PyPDFLoader
 
-from rag.step2_chunk import CHUNK_OVERLAP, CHUNK_SIZE
+from rag.step1_load import clean_text, load_tender_pdf
+from rag.step2_chunk import CHUNK_OVERLAP, CHUNK_SIZE, split_into_chunks
 from rag.step3_embed_store import (
     CHROMA_FOLDER,
     EMBEDDING_MODEL,
     build_vector_store,
     load_vector_store,
 )
-from rag.step4_retrieve import TOP_K
-from rag.step5_prompt import TEMPLATE
+from rag.step4_retrieve import TOP_K, retrieve_chunks
+from rag.step5_prompt import TEMPLATE, build_prompt, format_context
 from rag.step6_generate import (
     CHAT_MODEL,
     FALLBACK_MODEL,
@@ -127,6 +129,35 @@ CSS = """
   padding: 2px 9px; opacity: .85;
 }
 .tour-live { font-size: 11.5px; opacity: .6; margin-top: 7px; font-family: ui-monospace, monospace; }
+.tour-panel {
+  border: 1px solid var(--border-color-primary); border-radius: 8px;
+  padding: 18px 20px; background: var(--background-fill-secondary);
+}
+.tour-head { margin-bottom: 10px; }
+.tour-stage {
+  font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: #b8860b;
+}
+.tour-title { font-size: 18px; font-weight: 600; margin: 3px 0 2px; }
+.tour-panel .tour-file { font-family: ui-monospace, monospace; font-size: 12.5px; opacity: .7; font-weight: 400; }
+.tour-panel p { font-size: 13.5px; line-height: 1.6; margin: 12px 0; }
+.tour-panel pre {
+  background: var(--background-fill-primary); border: 1px solid var(--border-color-primary);
+  border-radius: 5px; padding: 10px 12px; font-size: 11.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word; margin: 8px 0; overflow-x: auto;
+}
+.tour-prompt { max-height: 420px; overflow-y: auto; }
+.tour-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tour-ba b { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+.tour-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+.tour-tbl td { padding: 7px 8px; border-bottom: 1px solid var(--border-color-primary); }
+.tour-tbl td.num { font-family: ui-monospace, monospace; font-weight: 600; width: 62px; }
+.tour-answer {
+  border-left: 3px solid #b8860b; padding: 12px 14px; margin: 12px 0;
+  background: var(--background-fill-primary); border-radius: 0 5px 5px 0;
+  font-size: 14px; line-height: 1.6;
+}
+@media (max-width: 620px) { .tour-ba { grid-template-columns: 1fr; } }
 .tour-note {
   border-left: 3px solid #b8860b; padding: 10px 14px; margin: 14px 0;
   background: var(--background-fill-secondary); border-radius: 0 5px 5px 0;
@@ -282,6 +313,162 @@ actually replied, so the switch is visible rather than silent.
 </div>"""
 
 
+# ---------------------------------------------------------------------------
+# The guided tour: run one question through the pipeline, one stage at a time.
+# ---------------------------------------------------------------------------
+
+TOUR_STEPS = [
+    ("1. Load the PDF", "rag/step1_load.py", ["LangChain", "PyPDFLoader", "pypdf", "regex"]),
+    ("2. Split into chunks", "rag/step2_chunk.py", ["LangChain", "RecursiveCharacterTextSplitter"]),
+    ("3. Embed and store", "rag/step3_embed_store.py", ["sentence-transformers", "HuggingFaceEmbeddings", "Chroma"]),
+    ("4. Retrieve", "rag/step4_retrieve.py", ["Chroma", "as_retriever", "cosine similarity"]),
+    ("5. Build the prompt", "rag/step5_prompt.py", ["LangChain", "ChatPromptTemplate"]),
+    ("6. Generate the answer", "rag/step6_generate.py", ["init_chat_model", "LCEL", "Groq", "LiteLLM"]),
+]
+
+
+def _panel(body):
+    return f'<div class="tour-panel">{body}</div>'
+
+
+def _chips(tech):
+    return '<div class="tour-tech">' + "".join(f"<span>{html.escape(t)}</span>" for t in tech) + "</div>"
+
+
+def run_tour_stage(step, question, tender):
+    """Produce the display for one stage, actually running that stage."""
+    title, file, tech = TOUR_STEPS[step]
+    head = (
+        f'<div class="tour-head"><div><span class="tour-stage">Stage {step + 1} of 6</span>'
+        f'<div class="tour-title">{html.escape(title)}</div>'
+        f'<div class="tour-file">{html.escape(file)}</div></div></div>' + _chips(tech)
+    )
+
+    tender_name = None if tender == ALL_TENDERS else tender
+    sample = tender_name or (CARDS[0]["tender"] if CARDS else None)
+
+    if step == 0:
+        pages = load_tender_pdf(ROOT / "data" / "tenders" / f"{sample}.pdf")
+        raw = PyPDFLoader(str(ROOT / "data" / "tenders" / f"{sample}.pdf")).load()[0].page_content
+        body = (
+            "<p>The PDF becomes one Document per page. Keeping pages apart is what "
+            "lets the final answer cite a page number.</p>"
+            "<p>Some tenders place every word as its own block, so the raw text comes "
+            "out one word per line. <code>clean_text()</code> spots that and reflows it.</p>"
+            f"<div class='tour-live'>{html.escape(sample)}.pdf gave {len(pages)} pages with text</div>"
+            "<div class='tour-ba'><div><b>Raw from the PDF</b>"
+            f"<pre>{html.escape(repr(raw[:150]))}</pre></div>"
+            "<div><b>After clean_text()</b>"
+            f"<pre>{html.escape(clean_text(raw)[:260])}</pre></div></div>"
+        )
+
+    elif step == 1:
+        pages = load_tender_pdf(ROOT / "data" / "tenders" / f"{sample}.pdf")
+        chunks = split_into_chunks(pages)
+        shown = "".join(
+            f"<pre>page {c.metadata['page']} · {html.escape(c.page_content[:190])}</pre>"
+            for c in chunks[4:7]
+        )
+        body = (
+            "<p>A tender is far longer than the model's context window, and a smaller "
+            "chunk retrieves more precisely because its embedding is about one thing.</p>"
+            f"<div class='tour-live'>chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP} "
+            f"→ {len(pages)} pages became {len(chunks)} chunks</div>"
+            "<p><b>Three chunks in a row</b> — notice the overlap at their edges:</p>" + shown
+        )
+
+    elif step == 2:
+        from rag.step3_embed_store import get_embedding_model
+        emb = get_embedding_model()
+        vec = emb.embed_query(question or "earnest money deposit")
+        try:
+            total = len(load_vector_store().get()["ids"])
+        except Exception:
+            total = "?"
+        import numpy as np
+
+        def cos(a, b):
+            va, vb = emb.embed_query(a), emb.embed_query(b)
+            return float(np.dot(va, vb) / (np.linalg.norm(va) * np.linalg.norm(vb)))
+
+        pairs = [
+            ("last date for submission of bids", "Date and time of closing of bids is 11-05-2026"),
+            ("earnest money deposit", "EMD amount payable by the bidder"),
+            ("last date for submission of bids", "The glove box must have an oxygen sensor."),
+        ]
+        rows = "".join(
+            f"<tr><td class='num'>{cos(a, b):+.3f}</td><td>{html.escape(a)}</td>"
+            f"<td>{html.escape(b)}</td></tr>" for a, b in pairs
+        )
+        body = (
+            "<p>Each chunk becomes a list of numbers standing for its meaning. Chunks "
+            "that mean similar things get vectors pointing in similar directions, so "
+            "meaning can be compared arithmetically.</p>"
+            f"<div class='tour-live'>{EMBEDDING_MODEL.split('/')[-1]} · "
+            f"{len(vec)} numbers per chunk · {total} chunks stored in chroma_db/</div>"
+            f"<pre>your question → [{', '.join(f'{v:.3f}' for v in vec[:6])}, ...]</pre>"
+            "<p><b>Cosine similarity, computed live.</b> Different words, same meaning "
+            "scores high. Note the abbreviation in the middle row scoring poorly — a "
+            "small model does not reliably link \"EMD\" to its full form.</p>"
+            f"<table class='tour-tbl'>{rows}</table>"
+        )
+
+    elif step == 3:
+        chunks = retrieve_chunks(question, tender=tender_name)
+        rows = "".join(
+            f"<div class='proof'><span class='p-src'>{html.escape(c.metadata['tender'])} · "
+            f"page {c.metadata['page']}</span>{html.escape(c.page_content[:230])}</div>"
+            for c in chunks[:4]
+        )
+        body = (
+            "<p>The question is embedded with the same model, and Chroma returns the "
+            "chunks whose vectors are closest. Only these reach the prompt.</p>"
+            f"<div class='tour-live'>k={TOP_K} · searched "
+            f"{html.escape(tender_name or 'all three tenders')} · showing the top 4</div>"
+            + rows
+        )
+
+    elif step == 4:
+        chunks = retrieve_chunks(question, tender=tender_name)
+        body = (
+            "<p>This is the <b>Augmented</b> in Retrieval Augmented Generation. The "
+            "retrieved clauses are pasted in where <code>{context}</code> sits, and the "
+            "rules stop the model answering from its own general knowledge.</p>"
+            "<p><b>This is the exact text sent to the model:</b></p>"
+            f"<pre class='tour-prompt'>{html.escape(build_prompt(question, chunks)[:2600])}\n...</pre>"
+        )
+
+    else:
+        answer, chunks, model_used = answer_with_fallback(question, tender=tender_name)
+        srcs = []
+        for c in chunks:
+            tag = f"{c.metadata['tender']}, page {c.metadata['page']}"
+            if tag not in srcs:
+                srcs.append(tag)
+        body = (
+            "<p>The prompt goes to the model and the answer comes back. The main path "
+            "is the LCEL chain from class. The LiteLLM path used here retries on a "
+            "second model if the first call fails.</p>"
+            f"<div class='tour-answer'>{html.escape(answer)}</div>"
+            f"<div class='tour-live'>answered by {html.escape(model_used)} · "
+            f"temperature {TEMPERATURE} · sources: {html.escape(', '.join(srcs[:4]))}</div>"
+        )
+
+    return _panel(head + body), f"Stage {step + 1} of 6"
+
+
+def tour_start(question, tender):
+    q = question.strip() or "What is the earnest money deposit?"
+    panel, label = run_tour_stage(0, q, tender)
+    return 0, q, panel, label
+
+
+def tour_move(step, question, tender, delta):
+    step = max(0, min(len(TOUR_STEPS) - 1, step + delta))
+    panel, label = run_tour_stage(step, question, tender)
+    return step, panel, label
+
+
 def ask(question, tender_choice):
     """Called when the user presses Ask. Returns answer, proof and a status line."""
     if not question.strip():
@@ -357,7 +544,48 @@ with gr.Blocks(title="Tender RAG") as demo:
             outputs=[answer_box, proof_html, status_html],
         )
 
-    with gr.Tab("How it works"):
+    with gr.Tab("Guided tour"):
+        gr.Markdown("### Watch a question move through the pipeline")
+        gr.Markdown(
+            "Type a question, press **Start the tour**, then step through the six "
+            "stages. Each stage actually runs, so what you see is this question "
+            "going through this system, not a picture of one."
+        )
+        with gr.Row():
+            tour_q = gr.Textbox(
+                label="Question for the tour",
+                value="What is the earnest money deposit?",
+                lines=1, scale=3,
+            )
+            tour_tender = gr.Dropdown(
+                label="Search in", choices=dropdown_choices(),
+                value=ALL_TENDERS, scale=2,
+            )
+        with gr.Row():
+            tour_start_btn = gr.Button("Start the tour", variant="primary")
+            tour_back_btn = gr.Button("< Back")
+            tour_next_btn = gr.Button("Next >")
+
+        tour_label = gr.Markdown("")
+        tour_panel = gr.HTML()
+        tour_step = gr.State(0)
+
+        tour_start_btn.click(
+            fn=tour_start, inputs=[tour_q, tour_tender],
+            outputs=[tour_step, tour_q, tour_panel, tour_label],
+        )
+        tour_next_btn.click(
+            fn=lambda st, q, t: tour_move(st, q, t, 1),
+            inputs=[tour_step, tour_q, tour_tender],
+            outputs=[tour_step, tour_panel, tour_label],
+        )
+        tour_back_btn.click(
+            fn=lambda st, q, t: tour_move(st, q, t, -1),
+            inputs=[tour_step, tour_q, tour_tender],
+            outputs=[tour_step, tour_panel, tour_label],
+        )
+
+    with gr.Tab("Tech stack"):
         gr.Markdown("### The pipeline, stage by stage")
         gr.Markdown(
             "Each stage is one file in `rag/`, named after the stage. The chips "

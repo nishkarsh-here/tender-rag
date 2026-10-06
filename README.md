@@ -118,10 +118,23 @@ cp .env.example .env     # then put your Groq key in .env
 
 ## The guided tour
 
-The app has a second tab, **How it works**, which walks through the six stages
-with the libraries each one uses and the live numbers from the running system -
-how many chunks are indexed, the chunk size, the embedding dimension, the model
-and temperature. It also shows the actual prompt template and the measurements
+The app has three tabs.
+
+**Ask** is the tool itself.
+
+**Guided tour** takes one question and walks it through the six stages, one at a
+time, with Back and Next. Each stage actually runs, so you see that question
+going through this system rather than a diagram of one:
+
+1. the raw PDF text beside the cleaned text
+2. the page count turning into a chunk count, with three overlapping chunks shown
+3. the question as a vector, and cosine similarity computed live on three pairs
+4. the chunks that were retrieved, with their tender and page
+5. the finished prompt, exactly as it is sent
+6. the answer, with the model that produced it
+
+**Tech stack** lists the six stages with the libraries each one uses and the live
+numbers from the running system, the prompt template, and the measurements
 behind our choices.
 
 ## How to run
