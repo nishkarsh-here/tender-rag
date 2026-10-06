@@ -7,3 +7,5 @@ chroma_db/
 
 # internal planning notes, not part of the submission
 ANALYSIS.md
+.gradio/
+site/
