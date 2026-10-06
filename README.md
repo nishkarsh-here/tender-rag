@@ -116,11 +116,22 @@ pip install -r requirements.txt
 cp .env.example .env     # then put your Groq key in .env
 ```
 
-## The guided tour
+## The app
 
-The app has three tabs.
+The app has four tabs.
 
 **Ask** is the tool itself.
+
+**Why RAG?** answers the same question twice with the same model - once with the
+retrieved tender clauses in the prompt, once without - and shows both side by
+side. This is the demonstration, rather than the argument, that retrieval is
+doing the work.
+
+Sometimes the model simply refuses without the context, which is harmless. The
+case worth showing is when it guesses. Asked for the bid validity period of the
+NITI Aayog tender with no context, it answered "typically 90 days". The document
+says 75. A bidder working to 90 days misses the deadline, and nothing in the
+answer warns them.
 
 **Guided tour** takes one question and walks it through the six stages, one at a
 time, with Back and Next. Each stage actually runs, so you see that question

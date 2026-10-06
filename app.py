@@ -34,6 +34,7 @@ from rag.step6_generate import (
     PRIMARY_MODEL,
     TEMPERATURE,
     answer_with_fallback,
+    compare_with_and_without_rag,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -158,6 +159,21 @@ CSS = """
   font-size: 14px; line-height: 1.6;
 }
 @media (max-width: 620px) { .tour-ba { grid-template-columns: 1fr; } }
+.cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cmp-col {
+  border: 1px solid var(--border-color-primary); border-radius: 8px;
+  padding: 16px 18px; background: var(--background-fill-secondary); min-width: 0;
+}
+.cmp-col.bad { border-top: 3px solid #b4432f; }
+.cmp-col.good { border-top: 3px solid #1f7a4d; }
+.cmp-label {
+  font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; opacity: .72; margin-bottom: 4px;
+}
+.cmp-sub { font-size: 12px; opacity: .6; margin-bottom: 11px; line-height: 1.45; }
+.cmp-body { font-size: 13.5px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
+.cmp-src { font-family: ui-monospace, monospace; font-size: 11px; opacity: .6; margin-top: 11px; }
+@media (max-width: 620px) { .cmp-grid { grid-template-columns: 1fr; } }
 .tour-note {
   border-left: 3px solid #b8860b; padding: 10px 14px; margin: 14px 0;
   background: var(--background-fill-secondary); border-radius: 0 5px 5px 0;
@@ -469,6 +485,40 @@ def tour_move(step, question, tender, delta):
     return step, panel, label
 
 
+
+def compare_rag(question, tender_choice):
+    """Answer the same question with and without the retrieved context."""
+    question = question.strip()
+    if not question:
+        return "<p>Type a question first.</p>"
+
+    tender = None if tender_choice == ALL_TENDERS else tender_choice
+    without, with_rag, chunks = compare_with_and_without_rag(question, tender=tender)
+
+    srcs = []
+    for c in chunks:
+        tag = f"{c.metadata['tender']}, page {c.metadata['page']}"
+        if tag not in srcs:
+            srcs.append(tag)
+
+    return f"""<div class="cmp-grid">
+  <div class="cmp-col bad">
+    <div class="cmp-label">Without RAG</div>
+    <div class="cmp-sub">The same model, the same question, no tender text.
+      It has never read this document.</div>
+    <div class="cmp-body">{html.escape(without.strip()[:1100])}</div>
+    <div class="cmp-src">no sources - nothing was retrieved</div>
+  </div>
+  <div class="cmp-col good">
+    <div class="cmp-label">With RAG</div>
+    <div class="cmp-sub">The same model, the same question, with the retrieved
+      clauses pasted into the prompt.</div>
+    <div class="cmp-body">{html.escape(with_rag.strip()[:1100])}</div>
+    <div class="cmp-src">{html.escape(' · '.join(srcs[:4]))}</div>
+  </div>
+</div>"""
+
+
 def ask(question, tender_choice):
     """Called when the user presses Ask. Returns answer, proof and a status line."""
     if not question.strip():
@@ -543,6 +593,38 @@ with gr.Blocks(title="Tender RAG") as demo:
             inputs=[question_box, tender_dropdown],
             outputs=[answer_box, proof_html, status_html],
         )
+
+    with gr.Tab("Why RAG?"):
+        gr.Markdown("### The same model, the same question, with and without retrieval")
+        gr.Markdown(
+            "This is the question we expect to be asked: *how is this different from "
+            "just asking ChatGPT?* Rather than argue about it, the app answers the "
+            "same question twice with the same model, once with the retrieved tender "
+            "clauses in the prompt and once without, and shows both."
+        )
+        with gr.Row():
+            cmp_q = gr.Textbox(
+                label="Question",
+                value="What is the bid validity period?",
+                lines=1, scale=3,
+            )
+            cmp_tender = gr.Dropdown(
+                label="Search in", choices=dropdown_choices(),
+                value=ALL_TENDERS, scale=2,
+            )
+        cmp_btn = gr.Button("Answer it both ways", variant="primary")
+        cmp_out = gr.HTML()
+
+        gr.Markdown(
+            "**What to look for.** Sometimes the model refuses, which is harmless. "
+            "The dangerous case is when it guesses: asked for the bid validity period "
+            "of the NITI Aayog tender, it answered *\"typically 90 days\"*. The "
+            "document says **75**. A bidder working to 90 days misses the deadline, "
+            "and nothing in the answer warns them. Retrieval is what replaces a "
+            "plausible guess with the clause and its page number."
+        )
+
+        cmp_btn.click(fn=compare_rag, inputs=[cmp_q, cmp_tender], outputs=[cmp_out])
 
     with gr.Tab("Guided tour"):
         gr.Markdown("### Watch a question move through the pipeline")

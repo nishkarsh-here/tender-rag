@@ -69,6 +69,34 @@ def generate_answer(question, k=TOP_K, tender=None):
     return answer, chunks
 
 
+
+def answer_without_rag(question):
+    """Ask the model the same question with no retrieved context at all.
+
+    This is here to make the case for the whole pipeline. The model has never
+    seen these tenders, so without the retrieved clauses it can only refuse or
+    guess. Guessing is the dangerous one: asked for the bid validity period of
+    a tender it has not read, it answered "typically 90 days" when the document
+    says 75. A bidder acting on that misses the deadline.
+
+    Used by the "With and without RAG" comparison in the app.
+    """
+    llm = init_chat_model(
+        CHAT_MODEL,
+        model_provider="groq",
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS,
+    )
+    return llm.invoke(question).content
+
+
+def compare_with_and_without_rag(question, tender=None):
+    """Answer the same question both ways, for the side-by-side comparison."""
+    without = answer_without_rag(question)
+    with_rag, chunks = generate_answer(question, tender=tender)
+    return without, with_rag, chunks
+
+
 def ask_llm_with_fallback(prompt_text):
     """Try the primary model. If the call fails, use the fallback model.
 
