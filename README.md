@@ -5,6 +5,12 @@ government tender documents, and shows which page each answer came from.
 
 Generative AI, Assignment 3 — AI & Data Science Program, Jio Institute.
 
+**Live demo:** https://70ea21f7443a868304.gradio.live
+
+That is a Gradio share link, so it is only up while we are running the app on
+our machine, and it expires after about a week. If it does not open, the app
+runs locally in two commands — see [How to run](#how-to-run) below.
+
 ---
 
 ## The problem
