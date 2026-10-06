@@ -5,7 +5,14 @@ government tender documents, and shows which page each answer came from.
 
 Generative AI, Assignment 3. AI & Data Science Program, Jio Institute.
 
-## Running it
+**Live app:** https://tender-rag.onrender.com
+
+It is on Render's free tier, which spins the instance down after about fifteen
+minutes of no traffic, so the first request after a quiet spell takes roughly a
+minute while it wakes up. After that it is quick. Open it once before you need
+it rather than on the spot.
+
+## Running it locally
 
 Two commands, once you have a free Groq key (see [Setup](#setup)):
 
