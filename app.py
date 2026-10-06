@@ -10,15 +10,29 @@ The tender cards shown on the home screen come from data/tender_cards.json,
 which build_tender_cards.py produces by running the same pipeline.
 """
 
+import argparse
 import html
 import json
 from pathlib import Path
 
 import gradio as gr
 
-from rag.step3_embed_store import CHROMA_FOLDER, build_vector_store, load_vector_store
+from rag.step2_chunk import CHUNK_OVERLAP, CHUNK_SIZE
+from rag.step3_embed_store import (
+    CHROMA_FOLDER,
+    EMBEDDING_MODEL,
+    build_vector_store,
+    load_vector_store,
+)
 from rag.step4_retrieve import TOP_K
-from rag.step6_generate import answer_with_fallback
+from rag.step5_prompt import TEMPLATE
+from rag.step6_generate import (
+    CHAT_MODEL,
+    FALLBACK_MODEL,
+    PRIMARY_MODEL,
+    TEMPERATURE,
+    answer_with_fallback,
+)
 
 ROOT = Path(__file__).resolve().parent
 CARDS_FILE = ROOT / "data" / "tender_cards.json"
@@ -92,6 +106,32 @@ CSS = """
   margin-bottom: 5px;
 }
 .statusline { font-family: ui-monospace, monospace; font-size: 12px; opacity: .7; }
+.tour-step {
+  display: grid; grid-template-columns: 30px 1fr; gap: 14px;
+  padding: 15px 0; border-top: 1px solid var(--border-color-primary);
+}
+.tour-step:first-child { border-top: 0; }
+.tour-n {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #b8860b; color: #fff;
+  display: grid; place-items: center;
+  font-size: 12px; font-family: ui-monospace, monospace; margin-top: 2px;
+}
+.tour-body { min-width: 0; }
+.tour-file { font-family: ui-monospace, monospace; font-size: 13px; font-weight: 600; }
+.tour-what { font-size: 13.5px; opacity: .85; margin: 4px 0 8px; line-height: 1.55; }
+.tour-tech { display: flex; flex-wrap: wrap; gap: 6px; }
+.tour-tech span {
+  font-family: ui-monospace, monospace; font-size: 11px;
+  border: 1px solid var(--border-color-primary); border-radius: 10px;
+  padding: 2px 9px; opacity: .85;
+}
+.tour-live { font-size: 11.5px; opacity: .6; margin-top: 7px; font-family: ui-monospace, monospace; }
+.tour-note {
+  border-left: 3px solid #b8860b; padding: 10px 14px; margin: 14px 0;
+  background: var(--background-fill-secondary); border-radius: 0 5px 5px 0;
+  font-size: 13px; line-height: 1.6;
+}
 footer { display: none !important; }
 """
 
@@ -149,6 +189,99 @@ def dropdown_choices():
     return choices
 
 
+def tour_html():
+    """The guided tour: what each stage does, and what it is built with.
+
+    The numbers are read from the code and the live vector store, so this page
+    cannot drift out of date with what the system actually does.
+    """
+    try:
+        indexed = len(load_vector_store().get()["ids"])
+    except Exception:
+        indexed = "not built yet"
+
+    pages = sum(c["pages"] for c in CARDS) if CARDS else "?"
+
+    steps = [
+        (
+            "rag/step1_load.py",
+            "Read each tender PDF into one Document per page, then clean the text. "
+            "Keeping pages separate is what lets an answer cite a page number later. "
+            "Two of our tenders put every word on its own line, so the cleaner detects "
+            "that and reflows them into sentences.",
+            ["LangChain", "PyPDFLoader", "pypdf", "re (regex)"],
+            f"{len(CARDS)} tenders, {pages} pages with text",
+        ),
+        (
+            "rag/step2_chunk.py",
+            "Cut the pages into small overlapping chunks. A tender is far longer than "
+            "the model's context window, and a smaller chunk retrieves more precisely "
+            "because its embedding is about one thing.",
+            ["LangChain", "RecursiveCharacterTextSplitter"],
+            f"chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP} -> {indexed} chunks",
+        ),
+        (
+            "rag/step3_embed_store.py",
+            "Turn every chunk into a vector that represents its meaning, and store it. "
+            "This is what lets a question about the \"EMD\" find a clause that says "
+            "\"earnest money deposit\" instead of failing on the wording.",
+            ["sentence-transformers", "HuggingFaceEmbeddings", "Chroma"],
+            f"{EMBEDDING_MODEL.split('/')[-1]}, 384 dimensions, saved to chroma_db/",
+        ),
+        (
+            "rag/step4_retrieve.py",
+            "Embed the question and return the chunks closest to it by cosine "
+            "similarity. Picking a tender adds a metadata filter, so the search is "
+            "still by meaning but only inside that document.",
+            ["Chroma", "as_retriever", "cosine similarity", "metadata filter"],
+            f"top k={TOP_K} of {indexed} chunks",
+        ),
+        (
+            "rag/step5_prompt.py",
+            "Paste the retrieved clauses into the prompt as context, and tell the "
+            "model to answer only from them and to say so when they do not cover the "
+            "question. This is the \"Augmented\" in Retrieval Augmented Generation.",
+            ["LangChain", "ChatPromptTemplate"],
+            "{context} + {question}, with a refuse-if-absent instruction",
+        ),
+        (
+            "rag/step6_generate.py",
+            "Send the finished prompt to the model and return the answer. The main "
+            "path is the LCEL chain from class. A second path goes through LiteLLM, "
+            "which retries on a different model if the first call fails.",
+            ["LangChain", "init_chat_model", "LCEL", "StrOutputParser", "Groq", "LiteLLM"],
+            f"{CHAT_MODEL}, temperature {TEMPERATURE}",
+        ),
+    ]
+
+    blocks = []
+    for i, (file, what, tech, live) in enumerate(steps, start=1):
+        chips = "".join(f"<span>{html.escape(t)}</span>" for t in tech)
+        blocks.append(
+            f"""<div class="tour-step">
+  <div class="tour-n">{i}</div>
+  <div class="tour-body">
+    <div class="tour-file">{html.escape(file)}</div>
+    <div class="tour-what">{what}</div>
+    <div class="tour-tech">{chips}</div>
+    <div class="tour-live">{html.escape(str(live))}</div>
+  </div>
+</div>"""
+        )
+    return "".join(blocks)
+
+
+def fallback_html():
+    return f"""<div class="tour-note">
+<b>If the model call fails</b><br>
+<code>{html.escape(PRIMARY_MODEL)}</code> &nbsp;-&gt;&nbsp; call raises &nbsp;-&gt;&nbsp;
+<code>{html.escape(FALLBACK_MODEL)}</code><br>
+One try/except in <code>rag/step6_generate.py</code>. The same prompt goes to the
+second model, and the status line under every answer names the model that
+actually replied, so the switch is visible rather than silent.
+</div>"""
+
+
 def ask(question, tender_choice):
     """Called when the user presses Ask. Returns answer, proof and a status line."""
     if not question.strip():
@@ -175,7 +308,7 @@ def ask(question, tender_choice):
     return answer, "".join(proofs), status
 
 
-with gr.Blocks(title="Tender RAG", theme=gr.themes.Soft(), css=CSS) as demo:
+with gr.Blocks(title="Tender RAG") as demo:
     gr.Markdown("## Tender RAG")
     gr.Markdown(
         "Ask a question about a government tender. The answer comes only from "
@@ -184,44 +317,90 @@ with gr.Blocks(title="Tender RAG", theme=gr.themes.Soft(), css=CSS) as demo:
         "instead of guessing."
     )
 
-    gr.Markdown("### Tenders loaded")
-    gr.HTML(card_html())
+    with gr.Tab("Ask"):
+        gr.Markdown("### Tenders loaded")
+        gr.HTML(card_html())
 
-    gr.Markdown("### Ask a question")
-    with gr.Row():
-        question_box = gr.Textbox(
-            label="Your question",
-            placeholder="e.g. What is the earnest money deposit?",
-            lines=2,
-            scale=3,
+        gr.Markdown("### Ask a question")
+        with gr.Row():
+            question_box = gr.Textbox(
+                label="Your question",
+                placeholder="e.g. What is the earnest money deposit?",
+                lines=2,
+                scale=3,
+            )
+            tender_dropdown = gr.Dropdown(
+                label="Search in",
+                choices=dropdown_choices(),
+                value=ALL_TENDERS,
+                scale=2,
+            )
+
+        gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question_box, label="Try one")
+
+        ask_button = gr.Button("Ask", variant="primary")
+
+        answer_box = gr.Textbox(label="Answer", lines=4)
+        status_html = gr.HTML()
+
+        with gr.Accordion("Show the clauses this answer came from", open=False):
+            proof_html = gr.HTML()
+
+        ask_button.click(
+            fn=ask,
+            inputs=[question_box, tender_dropdown],
+            outputs=[answer_box, proof_html, status_html],
         )
-        tender_dropdown = gr.Dropdown(
-            label="Search in",
-            choices=dropdown_choices(),
-            value=ALL_TENDERS,
-            scale=2,
+        question_box.submit(
+            fn=ask,
+            inputs=[question_box, tender_dropdown],
+            outputs=[answer_box, proof_html, status_html],
         )
 
-    gr.Examples(examples=EXAMPLE_QUESTIONS, inputs=question_box, label="Try one")
+    with gr.Tab("How it works"):
+        gr.Markdown("### The pipeline, stage by stage")
+        gr.Markdown(
+            "Each stage is one file in `rag/`, named after the stage. The chips "
+            "under each one are the libraries that stage uses, and the grey line "
+            "is what it is doing right now in this running app."
+        )
+        gr.HTML(tour_html())
 
-    ask_button = gr.Button("Ask", variant="primary")
+        gr.Markdown("### Falling back to a second model")
+        gr.HTML(fallback_html())
 
-    answer_box = gr.Textbox(label="Answer", lines=4)
-    status_html = gr.HTML()
+        gr.Markdown("### The prompt we send")
+        gr.Markdown(
+            "Everything above exists to fill in `{context}` below. The retrieved "
+            "clauses go in there, and the rules are what stop the model answering "
+            "from its own general knowledge."
+        )
+        gr.Code(value=TEMPLATE, language=None, label="rag/step5_prompt.py")
 
-    with gr.Accordion("Show the clauses this answer came from", open=False):
-        proof_html = gr.HTML()
-
-    ask_button.click(
-        fn=ask,
-        inputs=[question_box, tender_dropdown],
-        outputs=[answer_box, proof_html, status_html],
-    )
-    question_box.submit(
-        fn=ask,
-        inputs=[question_box, tender_dropdown],
-        outputs=[answer_box, proof_html, status_html],
-    )
+        gr.Markdown("### What we measured")
+        gr.Markdown(
+            "**Chunk size.** We started at 1000 characters, the class default, and "
+            "it worked badly: page 1 of a tender is a summary table, so at that size "
+            "it becomes one chunk whose embedding averages many topics. Measured on "
+            "six questions we checked by hand in the PDFs - 300: 5/6, 500: 3/6, "
+            "800: 3/6, 1000: 1/6, 1500: 2/6. We use 300.\n\n"
+            "**How many chunks.** On twelve hand-checked questions - k=8: 10/12, "
+            "k=10: 11/12, k=20: 12/12. We use 10, because k=20 doubles the prompt to "
+            "chase one tender reference number.\n\n"
+            "**Hybrid retrieval.** We built the BM25 + semantic ensemble from class "
+            "and measured it. It fixed one question and broke two others, and simply "
+            "raising k did better. We kept semantic search. The numbers and the "
+            "reasoning are in `rag/step4_retrieve.py` under `WHY_NOT_HYBRID`."
+        )
 
 if __name__ == "__main__":
-    demo.launch()
+    parser = argparse.ArgumentParser(description="Run the Tender RAG app.")
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="also create a temporary public link (useful when demonstrating)",
+    )
+    args = parser.parse_args()
+
+    # Gradio 6 takes the theme and the stylesheet here rather than on Blocks.
+    demo.launch(theme=gr.themes.Soft(), css=CSS, share=args.share)

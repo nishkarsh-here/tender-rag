@@ -95,6 +95,8 @@ python -m rag.step5_prompt
 | Embeddings | `rag/step3_embed_store.py` | `get_embedding_model()` |
 | Vector store | `rag/step3_embed_store.py` | `build_vector_store()` |
 | Similarity search / retrieval | `rag/step4_retrieve.py` | `retrieve_chunks()` |
+| Hybrid BM25 + semantic (measured, not used) | `rag/step4_retrieve.py` | `retrieve_hybrid()` |
+| Structured output (Pydantic) | `build_tender_cards.py` | `build_card()` |
 | Metadata filtering | `rag/step4_retrieve.py` | `retrieve_chunks(tender=...)` |
 | Prompt template | `rag/step5_prompt.py` | `RAG_PROMPT`, `build_prompt()` |
 | Inserting retrieved context | `rag/step5_prompt.py` | `format_context()` |
@@ -113,6 +115,14 @@ pip install -r requirements.txt
 
 cp .env.example .env     # then put your Groq key in .env
 ```
+
+## The guided tour
+
+The app has a second tab, **How it works**, which walks through the six stages
+with the libraries each one uses and the live numbers from the running system -
+how many chunks are indexed, the chunk size, the embedding dimension, the model
+and temperature. It also shows the actual prompt template and the measurements
+behind our choices.
 
 ## How to run
 
@@ -183,10 +193,42 @@ answers we had checked by hand in the PDFs:
 | 1000 | 142 | 1 of 6 |
 | 1500 | 100 | 2 of 6 |
 
-**k = 8.** Because the chunks are small, one chunk is often only part of a
-clause. On the same six questions, k=4 and k=6 both gave 5 of 6, and k=8 gave
-6 of 6. Eight chunks of 300 characters is still a shorter prompt than four
-chunks of 1000 would have been.
+**k = 10.** Because the chunks are small, one chunk is often only part of a
+clause. Measured on twelve questions we checked by hand in the PDFs:
+
+| chunks retrieved | answers found |
+|---|---|
+| k = 8 | 10 of 12 |
+| k = 10 | 11 of 12 |
+| k = 12 | 11 of 12 |
+| k = 20 | 12 of 12 |
+
+We use 10. Going to 20 does find the last one, but it doubles the amount of
+text in the prompt to chase a single tender reference number.
+
+**Hybrid retrieval: tried, measured, not kept.** Semantic search at k=8 was
+missing "Who should the demand draft be drawn in favour of?", even though page 1
+says "Demand Draft drawn in favour of The Director". So we built the BM25 +
+semantic ensemble from the class notebook, since BM25 matches that phrase
+directly.
+
+Our first test said hybrid won, 9 of 10 against 7 of 10 - but we had written
+those ten questions after watching semantic search fail, so the test was biased
+towards the thing we had just built. On a fairer set of twelve questions:
+
+| retriever | answers found |
+|---|---|
+| semantic only, k=8 | 10 of 12 |
+| BM25 only, k=8 | 4 of 12 |
+| hybrid, keep 8 | 8 of 12 |
+| hybrid, keep 10 | 10 of 12 |
+| semantic only, k=10 | 11 of 12 |
+
+Hybrid fixed that one question and broke two others, because BM25 pulled in
+chunks that merely repeated a keyword and pushed out the summary table holding
+the answer. Raising k on plain semantic search did better and is much simpler,
+so that is what we kept. `retrieve_hybrid()` is still in
+`rag/step4_retrieve.py` with the numbers, so the comparison can be re-run.
 
 **Temperature 0.** Reading a tender is factual extraction, not creative writing.
 The same question should give the same answer.
@@ -222,9 +264,9 @@ interface is identical, and this version runs with nothing but `pip install`.
 
 ## Possible improvements
 
-- Hybrid retrieval (BM25 together with semantic search). This would directly fix
-  the abbreviation weakness above, because BM25 matches the literal string
-  "EMD", and would also catch exact tender reference numbers.
+- A better fix for the abbreviation weakness. Hybrid BM25 retrieval was the
+  obvious candidate and it did not work (see above), so the next thing to try is
+  a stronger embedding model.
 - A labelled set of questions and expected clauses, so retrieval can be measured
   properly instead of spot-checked.
 - OCR for scanned tenders.
