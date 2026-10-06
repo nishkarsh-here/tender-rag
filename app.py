@@ -28,6 +28,13 @@ from rag.step3_embed_store import (
 )
 from rag.step4_retrieve import TOP_K, retrieve_chunks
 from rag.step5_prompt import TEMPLATE, build_prompt, format_context
+from check_eligibility import (
+    ReportUnavailable,
+    check,
+    company_by_id,
+    format_company,
+    load_companies,
+)
 from rag.step6_generate import (
     CHAT_MODEL,
     FALLBACK_MODEL,
@@ -174,6 +181,35 @@ CSS = """
 .cmp-body { font-size: 13.5px; line-height: 1.62; white-space: pre-wrap; word-break: break-word; }
 .cmp-src { font-family: ui-monospace, monospace; font-size: 11px; opacity: .6; margin-top: 11px; }
 @media (max-width: 620px) { .cmp-grid { grid-template-columns: 1fr; } }
+.verdict {
+  border-radius: 8px; padding: 15px 18px; margin-bottom: 14px;
+  border: 1px solid var(--border-color-primary);
+  background: var(--background-fill-secondary);
+}
+.verdict.yes { border-left: 4px solid #1f7a4d; }
+.verdict.no { border-left: 4px solid #b4432f; }
+.verdict.maybe { border-left: 4px solid #b8860b; }
+.verdict-head { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+.verdict-sum { font-size: 13.5px; line-height: 1.6; opacity: .9; }
+.crit { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+.crit th {
+  text-align: left; font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+  opacity: .6; padding: 0 10px 7px 0; border-bottom: 1px solid var(--border-color-primary);
+}
+.crit td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--border-color-primary); vertical-align: top; }
+.crit td.v { white-space: nowrap; width: 86px; }
+.pill {
+  font-family: ui-monospace, monospace; font-size: 10.5px; padding: 2px 8px;
+  border-radius: 10px; border: 1px solid currentColor;
+}
+.pill.met { color: #1f7a4d; }
+.pill.notmet { color: #b4432f; }
+.pill.unclear { color: #b8860b; }
+.crit td.req { font-weight: 600; width: 30%; }
+.crit td.why { opacity: .82; line-height: 1.5; }
+.crit td.pg { font-family: ui-monospace, monospace; font-size: 11px; opacity: .55; white-space: nowrap; width: 62px; }
+.missing { margin-top: 14px; font-size: 13px; }
+.missing li { margin-bottom: 4px; }
 .tour-note {
   border-left: 3px solid #b8860b; padding: 10px 14px; margin: 14px 0;
   background: var(--background-fill-secondary); border-radius: 0 5px 5px 0;
@@ -519,6 +555,120 @@ def compare_rag(question, tender_choice):
 </div>"""
 
 
+
+def company_choices():
+    return [(c["name"], c["id"]) for c in load_companies()]
+
+
+def company_profile_text(company_id):
+    company = company_by_id(company_id)
+    return format_company(company) if company else ""
+
+
+def _pill(verdict):
+    key = {"Met": "met", "Not met": "notmet"}.get(verdict, "unclear")
+    return f'<span class="pill {key}">{html.escape(verdict)}</span>'
+
+
+def run_eligibility(company_id, profile_text, tender_choice):
+    """Check one company against one tender, using the RAG pipeline."""
+    tender = None if tender_choice == ALL_TENDERS else tender_choice
+    if not tender:
+        return "<p>Pick one tender. Eligibility is per tender, so \"All tenders\" does not apply.</p>"
+
+    base = company_by_id(company_id) or {"name": "Company", "profile": {}}
+    # Whatever is in the box is what gets checked, so an edited or uploaded
+    # profile is used as typed rather than the saved one.
+    company = {"name": base["name"], "profile": {"Profile": profile_text}}
+
+    try:
+        report, chunks = check(company, tender)
+    except ReportUnavailable as error:
+        return f"<div class='verdict maybe'><div class='verdict-head'>Could not produce a report</div><div class='verdict-sum'>{html.escape(str(error))}</div></div>"
+
+    cls = {"Likely eligible": "yes", "Likely not eligible": "no"}.get(report.overall, "maybe")
+    rows = "".join(
+        f"<tr><td class='v'>{_pill(c.verdict)}</td>"
+        f"<td class='req'>{html.escape(c.requirement)}</td>"
+        f"<td class='why'>{html.escape(c.reason)}</td>"
+        f"<td class='pg'>{html.escape(str(c.tender_page).replace('page page ', 'p').replace('page ', 'p'))}</td></tr>"
+        for c in report.criteria
+    )
+    missing = ""
+    if report.missing_documents:
+        items = "".join(f"<li>{html.escape(d)}</li>" for d in report.missing_documents)
+        missing = f"<div class='missing'><b>Documents the profile does not mention</b><ul>{items}</ul></div>"
+
+    pages = sorted({c.metadata["page"] for c in chunks})
+    return f"""<div class="verdict {cls}">
+  <div class="verdict-head">{html.escape(report.overall)}</div>
+  <div class="verdict-sum">{html.escape(report.summary)}</div>
+</div>
+<table class="crit">
+  <tr><th>Verdict</th><th>Requirement from the tender</th><th>Why</th><th>Page</th></tr>
+  {rows}
+</table>
+{missing}
+<div class="statusline">read {len(chunks)} chunks from pages {html.escape(str(pages))} of {html.escape(tender)}</div>"""
+
+
+def upload_tender(file_obj):
+    """Add an uploaded tender PDF to the index so it can be queried."""
+    if file_obj is None:
+        return "No file chosen.", gr.update(), gr.update()
+
+    src = Path(file_obj.name if hasattr(file_obj, "name") else file_obj)
+    if src.suffix.lower() != ".pdf":
+        return "That is not a PDF.", gr.update(), gr.update()
+
+    dest = ROOT / "data" / "tenders" / src.name
+    dest.write_bytes(src.read_bytes())
+
+    try:
+        pages = load_tender_pdf(dest)
+        if not pages:
+            dest.unlink(missing_ok=True)
+            return ("No text could be read from that PDF. It is probably a scan, "
+                    "and we did not add OCR.", gr.update(), gr.update())
+        chunks = split_into_chunks(pages)
+        load_vector_store().add_documents(chunks)
+    except Exception as error:
+        dest.unlink(missing_ok=True)
+        return f"Could not index that file: {type(error).__name__}", gr.update(), gr.update()
+
+    # Clear the cached BM25 chunks so the new tender is searchable too.
+    import rag.step4_retrieve as r4
+    r4._chunks = None
+    r4._bm25_cache.clear()
+
+    choices = dropdown_choices() + [(dest.stem, dest.stem)]
+    msg = (f"Added **{dest.name}** - {len(pages)} pages, {len(chunks)} chunks indexed. "
+           f"Pick it in the dropdowns to query it. "
+           f"(Run `python build_tender_cards.py` to give it a card.)")
+    return msg, gr.update(choices=choices, value=dest.stem), gr.update(choices=choices)
+
+
+def upload_company(file_obj):
+    """Read a company profile from an uploaded .json or .txt file."""
+    if file_obj is None:
+        return gr.update(), "No file chosen."
+    path = Path(file_obj.name if hasattr(file_obj, "name") else file_obj)
+    try:
+        raw = path.read_text()
+    except Exception:
+        return gr.update(), "Could not read that file as text."
+
+    if path.suffix.lower() == ".json":
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                inner = data.get("profile", data)
+                raw = "\n".join(f"{k}: {v}" for k, v in inner.items())
+        except json.JSONDecodeError:
+            return gr.update(), "That file is not valid JSON."
+    return gr.update(value=raw), f"Loaded {path.name}. Edit it below if you need to."
+
+
 def ask(question, tender_choice):
     """Called when the user presses Ask. Returns answer, proof and a status line."""
     if not question.strip():
@@ -592,6 +742,73 @@ with gr.Blocks(title="Tender RAG") as demo:
             fn=ask,
             inputs=[question_box, tender_dropdown],
             outputs=[answer_box, proof_html, status_html],
+        )
+
+    with gr.Tab("Can we bid?"):
+        gr.Markdown("### Check a company against a tender's eligibility rules")
+        gr.Markdown(
+            "This is the same RAG pipeline pointed at a different question. It "
+            "retrieves the clauses about *who is allowed to bid*, puts them next to "
+            "the company profile, and asks for a structured verdict instead of prose "
+            "- so the result is a table with a page number against every line."
+        )
+
+        with gr.Row():
+            elig_company = gr.Dropdown(
+                label="Company", choices=company_choices(),
+                value=company_choices()[0][1], scale=2,
+            )
+            elig_tender = gr.Dropdown(
+                label="Tender", choices=dropdown_choices()[1:],
+                value=dropdown_choices()[1][1], scale=3,
+            )
+
+        elig_profile = gr.Textbox(
+            label="Company profile (edit it, or upload one below)",
+            value=company_profile_text(company_choices()[0][1]),
+            lines=12,
+        )
+
+        with gr.Accordion("Upload your own data", open=False):
+            gr.Markdown(
+                "**Company profile** - a `.json` or `.txt` file. A JSON object, or "
+                "one with a `profile` key, is flattened into lines."
+            )
+            company_file = gr.File(label="Company profile", file_types=[".json", ".txt"])
+            company_upload_msg = gr.Markdown("")
+
+            gr.Markdown(
+                "**Tender** - a PDF. It is chunked and added to the vector store "
+                "straight away, so you can ask about a tender the system has never "
+                "seen. It needs a real text layer; we did not add OCR."
+            )
+            tender_file = gr.File(label="Tender PDF", file_types=[".pdf"])
+            tender_upload_msg = gr.Markdown("")
+
+        elig_btn = gr.Button("Check eligibility", variant="primary")
+        elig_out = gr.HTML()
+
+        gr.Markdown(
+            "This is a reading aid, not a legal opinion. It only sees the clauses "
+            "retrieval found, which is why the report lists the pages it read - if a "
+            "requirement is on a page that was not retrieved, it cannot judge it."
+        )
+
+        elig_company.change(
+            fn=company_profile_text, inputs=[elig_company], outputs=[elig_profile]
+        )
+        elig_btn.click(
+            fn=run_eligibility,
+            inputs=[elig_company, elig_profile, elig_tender],
+            outputs=[elig_out],
+        )
+        company_file.upload(
+            fn=upload_company, inputs=[company_file],
+            outputs=[elig_profile, company_upload_msg],
+        )
+        tender_file.upload(
+            fn=upload_tender, inputs=[tender_file],
+            outputs=[tender_upload_msg, elig_tender, tender_dropdown],
         )
 
     with gr.Tab("Why RAG?"):

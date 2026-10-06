@@ -42,6 +42,9 @@ MAX_TOKENS = 1200
 
 CHAT_MODEL = "openai/gpt-oss-120b"
 
+# The smaller model we drop to when the main one fails or rate-limits.
+FALLBACK_CHAT_MODEL = "openai/gpt-oss-20b"
+
 # For LiteLLM the provider is part of the model name.
 PRIMARY_MODEL = "groq/openai/gpt-oss-120b"
 FALLBACK_MODEL = "groq/openai/gpt-oss-20b"

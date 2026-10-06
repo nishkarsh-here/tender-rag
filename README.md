@@ -70,6 +70,8 @@ clause is found even though no word matches.
 | `rag/step4_retrieve.py` | Finds the chunks closest to the question |
 | `rag/step5_prompt.py` | Builds the prompt that holds the retrieved context |
 | `rag/step6_generate.py` | Calls the LLM; also holds the LiteLLM fallback |
+| `check_eligibility.py` | Checks a company against a tender's eligibility clauses |
+| `data/companies.json` | Four example company profiles |
 | `app.py` | Gradio interface. Contains no RAG logic itself |
 | `notebooks/01_rag_pipeline_explained.ipynb` | Runs the pipeline step by step and prints each stage |
 | `data/tenders/` | Three real public tender PDFs |
@@ -97,6 +99,8 @@ python -m rag.step5_prompt
 | Similarity search / retrieval | `rag/step4_retrieve.py` | `retrieve_chunks()` |
 | Hybrid BM25 + semantic (measured, not used) | `rag/step4_retrieve.py` | `retrieve_hybrid()` |
 | Structured output (Pydantic) | `build_tender_cards.py` | `build_card()` |
+| Structured output (nested model) | `check_eligibility.py` | `check()` |
+| Model fallback chain | `check_eligibility.py` | `REPORT_MODELS` |
 | Metadata filtering | `rag/step4_retrieve.py` | `retrieve_chunks(tender=...)` |
 | Prompt template | `rag/step5_prompt.py` | `RAG_PROMPT`, `build_prompt()` |
 | Inserting retrieved context | `rag/step5_prompt.py` | `format_context()` |
@@ -121,6 +125,18 @@ cp .env.example .env     # then put your Groq key in .env
 The app has four tabs.
 
 **Ask** is the tool itself.
+
+**Can we bid?** checks a company against one tender's eligibility rules. It is
+the same pipeline aimed at a different question: retrieve the clauses about who
+is allowed to bid, put them beside the company profile, and ask for a structured
+verdict instead of prose, so the result is a table with a page number against
+every line. Four example companies are in `data/companies.json`, and you can
+edit a profile in the box, upload one as `.json` or `.txt`, or upload a new
+tender PDF, which is chunked and indexed on the spot.
+
+The four companies are built so each one fits a different tender, which makes
+the mismatches as informative as the matches - a Delhi display-maintenance firm
+fails the Kerala lift tender on office location and electrical licence.
 
 **Why RAG?** answers the same question twice with the same model - once with the
 retrieved tender clauses in the prompt, once without - and shows both side by
