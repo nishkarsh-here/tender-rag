@@ -5,13 +5,22 @@ government tender documents, and shows which page each answer came from.
 
 Generative AI, Assignment 3. AI & Data Science Program, Jio Institute.
 
-**Live demo:** https://70ea21f7443a868304.gradio.live
+## Running it
 
-That is a Gradio share link, so it is only up while we are running the app on
-our machine, and it expires after about a week. If it does not open, the app
-runs locally in two commands, see [How to run](#how-to-run) below.
+Two commands, once you have a free Groq key (see [Setup](#setup)):
 
----
+```bash
+python -m rag.step3_embed_store   # only needed if chroma_db/ is missing
+python app.py
+```
+
+Add `--share` to get a temporary public link, which is useful when
+demonstrating but expires after about a week.
+
+To host it permanently, `render.yaml` is set up for Render's free tier and
+`Dockerfile` covers hosts that take a container. The app reads `PORT` when a
+host sets one. The free tier allows 512 MB of memory and the app sits at about
+460 MB, which is why `litellm` is imported only when the fallback is used.
 
 ## The problem
 
@@ -277,10 +286,14 @@ The same question should give the same answer.
 collection and persists with a single argument. FAISS needs a separate docstore
 and an index-to-id mapping, which is more moving parts than this needs.
 
-**all-MiniLM-L6-v2 for embeddings.** Runs locally on the CPU, needs no API key
-and no separate model server, and indexes all three tenders in a few seconds.
-The class notebook used `nomic-embed-text` through Ollama; the LangChain
-interface is identical, and this version runs with nothing but `pip install`.
+**bge-small-en-v1.5 for embeddings, through fastembed.** We began with
+all-MiniLM-L6-v2 through sentence-transformers, which pulls in PyTorch at
+552 MB on disk, too large for the free hosting tier. fastembed runs the model
+with ONNX instead, at 76 MB. We only kept the change because it also retrieved
+better: on the twelve hand-checked questions MiniLM found 11 and bge-small
+found 12, including the tender reference number MiniLM never managed. The class
+notebook used `nomic-embed-text` through Ollama; all three behave the same from
+LangChain's side.
 
 ## Limitations
 

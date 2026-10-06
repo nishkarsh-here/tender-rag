@@ -12,6 +12,7 @@ which build_tender_cards.py produces by running the same pipeline.
 
 import argparse
 import html
+import os
 import json
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from rag.step6_generate import (
     TEMPERATURE,
     answer_with_fallback,
     compare_with_and_without_rag,
+    generate_answer,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -429,7 +431,15 @@ def ask(question, tender_choice):
 
     tender = None if tender_choice == ALL_TENDERS else tender_choice
     try:
-        answer, chunks, model_used = answer_with_fallback(question, tender=tender)
+        # The normal path is the LCEL chain from class. Only if that call fails
+        # do we go through LiteLLM, which retries on a second model. Keeping it
+        # this way round means litellm is not even imported unless something has
+        # gone wrong, which matters on a 512 MB host.
+        try:
+            answer, chunks = generate_answer(question, tender=tender)
+            model_used = CHAT_MODEL
+        except Exception:
+            answer, chunks, model_used = answer_with_fallback(question, tender=tender)
     except Exception as error:
         # Both models refused. On the Groq free tier this is almost always the
         # tokens-per-minute limit after a few questions in a row. Say so, rather
@@ -695,5 +705,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # When a host like Render runs this, it sets PORT and expects the app to
+    # listen on every interface. Locally neither is set and Gradio uses its
+    # own defaults.
+    port = os.environ.get("PORT")
+
     # Gradio 6 takes the theme and the stylesheet here rather than on Blocks.
-    demo.launch(theme=gr.themes.Soft(), css=CSS, share=args.share)
+    demo.launch(
+        theme=gr.themes.Soft(),
+        css=CSS,
+        share=args.share,
+        server_name="0.0.0.0" if port else None,
+        server_port=int(port) if port else None,
+    )

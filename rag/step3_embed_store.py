@@ -18,16 +18,22 @@ direction). Chroma does this for us inside similarity_search.
 from pathlib import Path
 
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 
-# The embedding model. all-MiniLM-L6-v2 is a small sentence-transformers
-# model that runs locally on the CPU and turns any text into a 384-number
-# vector. We picked it because it is free, needs no API key and no separate
-# model server, and is fast enough that indexing 3 tenders takes seconds.
-# (The class notebook used nomic-embed-text through Ollama. We use a local
-# sentence-transformers model instead so the project runs with nothing but
-# "pip install" - the LangChain interface is identical either way.)
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# The embedding model. bge-small-en-v1.5 runs locally on the CPU and turns any
+# text into a 384-number vector. We load it through fastembed, which runs the
+# model with ONNX instead of PyTorch.
+#
+# We started with all-MiniLM-L6-v2 through sentence-transformers, which pulls
+# in PyTorch - 552 MB on disk, too big for the free hosting tier we wanted to
+# deploy on. Swapping to fastembed brought that down to 76 MB. We only kept the
+# change because it also retrieved better: on the twelve hand-checked questions
+# MiniLM found 11 and bge-small found 12, including the tender reference number
+# that MiniLM had never managed.
+#
+# (The class notebook used nomic-embed-text through Ollama. Any of these work
+# the same way from LangChain's side: embed_documents and embed_query.)
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
 CHROMA_FOLDER = str(Path(__file__).resolve().parent.parent / "chroma_db")
 COLLECTION_NAME = "tenders"
@@ -45,7 +51,7 @@ def get_embedding_model():
     """
     global _embedding_model
     if _embedding_model is None:
-        _embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        _embedding_model = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
     return _embedding_model
 
 

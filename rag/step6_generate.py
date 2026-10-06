@@ -19,7 +19,6 @@ Both send the exact same prompt built in step 5.
 
 import os
 
-import litellm
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.output_parsers import StrOutputParser
@@ -106,6 +105,12 @@ def ask_llm_with_fallback(prompt_text):
     Returns the answer and the name of the model that actually produced it,
     so the app can show which one answered.
     """
+    # litellm is imported here rather than at the top of the file because it
+    # costs about 75 MB of memory to import, and the free hosting tier we
+    # deploy on only allows 512 MB. Importing it when the fallback is actually
+    # needed keeps the app inside that budget.
+    import litellm
+
     messages = [{"role": "user", "content": prompt_text}]
     try:
         response = litellm.completion(

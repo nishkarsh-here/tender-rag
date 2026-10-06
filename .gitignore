@@ -2,7 +2,6 @@
 __pycache__/
 *.pyc
 .env
-chroma_db/
 .ipynb_checkpoints/
 
 # internal planning notes, not part of the submission

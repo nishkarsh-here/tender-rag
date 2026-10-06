@@ -1,0 +1,20 @@
+# Deploying this app on Render's free tier.
+#
+# Render reads this file when the repository is connected. The one thing it
+# cannot read is the API key, which is set in the dashboard under Environment.
+#
+# Free instances sleep after about 15 minutes with no traffic and take roughly
+# a minute to wake on the next request. The vector store is committed to the
+# repository so that waking up does not also mean re-indexing the tenders.
+services:
+  - type: web
+    name: tender-rag
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false        # set this by hand in the Render dashboard
+      - key: PYTHON_VERSION
+        value: 3.12.6
